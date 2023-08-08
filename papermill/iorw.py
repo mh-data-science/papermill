@@ -40,10 +40,7 @@ except KeyError as exc:
         ADL = missing_environment_variable_generator("azure.datalake.store", "APPDATA")
     else:
         raise
-try:
-    from .abs import AzureBlobStore
-except ImportError:
-    AzureBlobStore = missing_dependency_generator("azure.storage.blob", "azure")
+from .abs import AzureBlobStore
 try:
     from gcsfs import GCSFileSystem
 except ImportError:
