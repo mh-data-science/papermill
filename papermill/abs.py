@@ -2,9 +2,8 @@
 import re
 import io
 
-from six.moves import urllib
-
-from azure.storage.blob import BlockBlobService
+from azure.storage.blob import BlobServiceClient
+from azure.identity import EnvironmentCredential
 
 
 class AzureBlobStore(object):
@@ -19,13 +18,14 @@ class AzureBlobStore(object):
         - write
     """
 
-    def __init__(self):
-        pass
+    def _blob_service_client(self, account_name, sas_token=None):
 
-    def _block_blob_service(self, account_name, sas_token):
+        blob_service_client = BlobServiceClient(
+            account_url="{account}.blob.core.windows.net".format(account=account_name),
+            credential=sas_token or EnvironmentCredential(),
+        )
 
-        block_blob_service = BlockBlobService(account_name=account_name, sas_token=sas_token)
-        return block_blob_service
+        return blob_service_client
 
     @classmethod
     def _split_url(self, url):
@@ -33,7 +33,7 @@ class AzureBlobStore(object):
         see: https://docs.microsoft.com/en-us/azure/storage/common/storage-dotnet-shared-access-signature-part-1  # noqa: E501
         abs://myaccount.blob.core.windows.net/sascontainer/sasblob.txt?sastoken
         """
-        match = re.match(r"abs://(.*)\.blob\.core\.windows\.net\/(.*)\/(.*)\?(.*)$", url)
+        match = re.match(r"abs://(.*)\.blob\.core\.windows\.net\/(.*?)\/([^\?]*)\??(.*)$", url)
         if not match:
             raise Exception("Invalid azure blob url '{0}'".format(url))
         else:
@@ -41,7 +41,7 @@ class AzureBlobStore(object):
                 "account": match.group(1),
                 "container": match.group(2),
                 "blob": match.group(3),
-                "sas_token": urllib.parse.unquote_plus(match.group(4)),
+                "sas_token": match.group(4),
             }
             return params
 
@@ -49,35 +49,22 @@ class AzureBlobStore(object):
         """Read storage at a given url"""
         params = self._split_url(url)
         output_stream = io.BytesIO()
-        block_blob_service = self._block_blob_service(
-            account_name=params["account"], sas_token=params["sas_token"]
-        )
-
-        block_blob_service.get_blob_to_stream(
-            container_name=params["container"], blob_name=params["blob"], stream=output_stream
-        )
-
+        blob_service_client = self._blob_service_client(params["account"], params["sas_token"])
+        blob_client = blob_service_client.get_blob_client(params['container'], params['blob'])
+        blob_client.download_blob().readinto(output_stream)
         output_stream.seek(0)
         return [line.decode("utf-8") for line in output_stream]
 
     def listdir(self, url):
         """Returns a list of the files under the specified path"""
         params = self._split_url(url)
-
-        block_blob_service = self._block_blob_service(
-            account_name=params["account"], sas_token=params["sas_token"]
-        )
-        blobs = block_blob_service.list_blobs(params["container"])
-        return blobs
+        blob_service_client = self._blob_service_client(params["account"], params["sas_token"])
+        container_client = blob_service_client.get_container_client(params["container"])
+        return list(container_client.list_blobs(params["blob"]))
 
     def write(self, buf, url):
         """Write buffer to storage at a given url"""
         params = self._split_url(url)
-
-        block_blob_service = self._block_blob_service(
-            account_name=params["account"], sas_token=params["sas_token"]
-        )
-
-        block_blob_service.create_blob_from_text(
-            container_name=params["container"], blob_name=params["blob"], text=buf
-        )
+        blob_service_client = self._blob_service_client(params["account"], params["sas_token"])
+        blob_client = blob_service_client.get_blob_client(params['container'], params['blob'])
+        blob_client.upload_blob(data=buf, overwrite=True)
